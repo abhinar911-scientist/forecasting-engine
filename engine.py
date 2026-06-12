@@ -235,7 +235,7 @@ def m_theta(train, h):
 def m_arima(train, h):
     from statsmodels.tsa.arima.model import ARIMA
     best, best_aic = None, np.inf
-    for order in [(1, 1, 1), (2, 1, 1), (1, 1, 2), (0, 1, 1), (1, 0, 1)]:
+    for order in [(1, 1, 1), (0, 1, 1), (1, 0, 1)]:
         try:
             r = ARIMA(train, order=order).fit()
             if r.aic < best_aic:
@@ -355,7 +355,7 @@ def m_xgboost(train, h):
 @_safe
 def m_rf(train, h):
     from sklearn.ensemble import RandomForestRegressor
-    return _ml_forecast(train, h, RandomForestRegressor(n_estimators=200, min_samples_leaf=2,
+    return _ml_forecast(train, h, RandomForestRegressor(n_estimators=120, min_samples_leaf=2,
                                                         random_state=42, n_jobs=-1))
 
 
@@ -366,7 +366,7 @@ def m_mlp(train, h):
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     mdl = make_pipeline(StandardScaler(),
-                        MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=800,
+                        MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=400,
                                      early_stopping=False, random_state=42))
     return _ml_forecast(train, h, mdl)
 
@@ -450,3 +450,55 @@ def forecast_all(s: pd.Series, models: list, horizon: int) -> pd.DataFrame:
         if name in MODEL_REGISTRY:
             out[name] = MODEL_REGISTRY[name](s, horizon)
     return pd.DataFrame(out, index=future_idx)
+
+
+def forecast_one(s: pd.Series, model: str, horizon: int) -> pd.Series:
+    future_idx = pd.date_range(s.index[-1] + pd.offsets.MonthBegin(1), periods=horizon, freq="MS")
+    return pd.Series(MODEL_REGISTRY[model](s, horizon), index=future_idx)
+
+
+# ----------------------------------------------------------------------------- 
+# 6. BATCH / PARALLEL EXECUTION (one self-contained worker per key)
+# -----------------------------------------------------------------------------
+def batch_worker(args):
+    """Process-pool worker: full pipeline for one key.
+    args = (key, series, vol_class, method, k, horizon, holdout, weights, fast_mode)
+    Returns (key, payload-dict) — everything pandas-pickled, safe across processes."""
+    key, s, vol_class, method, k, horizon, holdout, weights, fast = args
+    try:
+        c, lo, hi, fl = cleanse_series(s, method, k)
+        seg = classify_series(c)
+        seg["vol_class"] = vol_class
+        rule, pool = rule_for(seg)
+        res = run_bestfit(c, pool, horizon, holdout, weights, fast)
+        res.update(rule=rule, pool=pool, cleansed=c)
+        return key, res
+    except Exception as exc:                       # never kill the whole batch
+        return key, {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def run_batch_parallel(tasks: list, max_workers: int = None, progress_cb=None) -> dict:
+    """Run batch_worker over all tasks with a process pool; falls back to serial
+    execution when only one task or one core is available."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    n = len(tasks)
+    workers = max_workers or min(max(os.cpu_count() or 1, 2), 8)
+    results, done = {}, 0
+    if n == 1 or workers == 1:
+        for t in tasks:
+            k, payload = batch_worker(t)
+            results[k] = payload
+            done += 1
+            if progress_cb:
+                progress_cb(done, n)
+        return results
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(batch_worker, t) for t in tasks]
+        for f in as_completed(futs):
+            k, payload = f.result()
+            results[k] = payload
+            done += 1
+            if progress_cb:
+                progress_cb(done, n)
+    return results
