@@ -91,12 +91,43 @@ div[data-testid="stMetric"] label {{color:{SUBTEXT} !important;}}
 div[data-testid="stMetricValue"] {{color:{NEON} !important;}}
 
 /* ---- Workflow tabs: sequential, left -> right ---- */
-.stTabs [data-baseweb="tab-list"] {{background:#0e131b; border-radius:10px; gap:2px;
-    border:1px solid #1d2735; padding:4px; flex-wrap:wrap;}}
-.stTabs [data-baseweb="tab"] {{color:{SUBTEXT}; font-weight:600; border-radius:8px; padding:8px 14px;}}
-.stTabs [data-baseweb="tab"]:hover {{color:{NEON}; background:rgba(0,212,255,.07);}}
-.stTabs [aria-selected="true"] {{color:#02131c !important;
-    background:linear-gradient(90deg,#0077b6,{NEON}) !important;}}
+/* Streamlit's fixed header bar overlaps the top of the page — keep it the same
+   dark colour and push content below it so tabs are never hidden behind it */
+header[data-testid="stHeader"] {{background:#0a0e14 !important;}}
+.block-container {{padding-top:2.6rem !important;}}
+
+.stTabs [data-baseweb="tab-list"] {{background:#0e131b; border-radius:10px; gap:6px;
+    border:1px solid #1d2735; padding:6px; flex-wrap:wrap;}}
+
+/* inactive tabs: visible pill with panel background + bright label */
+.stTabs [data-baseweb="tab"], button[data-baseweb="tab"] {{
+    background:{PANEL} !important; border:1px solid {BORDER} !important;
+    border-radius:8px !important; padding:9px 16px !important; height:auto !important;}}
+
+/* tab LABEL text — Streamlit renders it inside nested p/div, which ignores the
+   button colour, so target every descendant with !important */
+.stTabs [data-baseweb="tab"] p, .stTabs [data-baseweb="tab"] div,
+.stTabs [data-baseweb="tab"] span, button[data-baseweb="tab"] p,
+button[data-baseweb="tab"] div, button[data-baseweb="tab"] span {{
+    color:{SUBTEXT} !important; font-weight:700 !important;
+    font-size:0.95rem !important;}}
+
+.stTabs [data-baseweb="tab"]:hover {{border-color:{NEON} !important;
+    box-shadow:0 0 10px rgba(0,212,255,.25);}}
+.stTabs [data-baseweb="tab"]:hover p, .stTabs [data-baseweb="tab"]:hover div,
+.stTabs [data-baseweb="tab"]:hover span {{color:{NEON} !important;}}
+
+/* active tab: neon gradient pill with dark label for contrast */
+.stTabs [aria-selected="true"], button[data-baseweb="tab"][aria-selected="true"] {{
+    background:linear-gradient(90deg,#0077b6,{NEON}) !important;
+    border-color:{NEON} !important;}}
+.stTabs [aria-selected="true"] p, .stTabs [aria-selected="true"] div,
+.stTabs [aria-selected="true"] span,
+button[data-baseweb="tab"][aria-selected="true"] p,
+button[data-baseweb="tab"][aria-selected="true"] div,
+button[data-baseweb="tab"][aria-selected="true"] span {{
+    color:#02131c !important;}}
+
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{display:none;}}
 
 .stButton>button, .stDownloadButton>button {{background:linear-gradient(90deg,#0077b6,{NEON});

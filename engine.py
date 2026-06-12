@@ -477,28 +477,61 @@ def batch_worker(args):
         return key, {"error": f"{type(exc).__name__}: {exc}"}
 
 
+def _run_serial(tasks, progress_cb=None):
+    results = {}
+    for i, t in enumerate(tasks, 1):
+        k, payload = batch_worker(t)
+        results[k] = payload
+        if progress_cb:
+            progress_cb(i, len(tasks))
+    return results
+
+
 def run_batch_parallel(tasks: list, max_workers: int = None, progress_cb=None) -> dict:
-    """Run batch_worker over all tasks with a process pool; falls back to serial
-    execution when only one task or one core is available."""
+    """Run batch_worker over all tasks with the best executor the environment
+    allows. Sandboxed hosts (e.g. Streamlit Community Cloud) often block new
+    process creation, so the strategy degrades gracefully:
+
+        1. ProcessPoolExecutor (true parallelism, 'spawn' context)
+        2. ThreadPoolExecutor  (numpy/statsmodels/LightGBM release the GIL
+                                inside their C cores, so threads still overlap)
+        3. Serial loop         (always works)
+    """
+    import multiprocessing
     import os
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
+                                    as_completed)
     n = len(tasks)
     workers = max_workers or min(max(os.cpu_count() or 1, 2), 8)
-    results, done = {}, 0
     if n == 1 or workers == 1:
-        for t in tasks:
-            k, payload = batch_worker(t)
-            results[k] = payload
-            done += 1
-            if progress_cb:
-                progress_cb(done, n)
-        return results
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(batch_worker, t) for t in tasks]
+        return _run_serial(tasks, progress_cb)
+
+    def _collect(executor):
+        results, done = {}, 0
+        futs = [executor.submit(batch_worker, t) for t in tasks]
         for f in as_completed(futs):
             k, payload = f.result()
             results[k] = payload
             done += 1
             if progress_cb:
                 progress_cb(done, n)
-    return results
+        return results
+
+    # 1) Process pool — explicit 'spawn' (Python 3.14 defaults to forkserver,
+    #    which fails on sandboxed hosts with ConnectionResetError)
+    try:
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
+            return _collect(ex)
+    except Exception:
+        pass  # process creation blocked → degrade to threads
+
+    # 2) Thread pool — safe everywhere, partial parallelism via GIL-releasing C code
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            return _collect(ex)
+    except Exception:
+        pass
+
+    # 3) Serial — guaranteed
+    return _run_serial(tasks, progress_cb)
