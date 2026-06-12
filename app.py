@@ -596,8 +596,10 @@ with wf[2]:
                     continue
                 fig.add_scatter(x=fc24.index, y=fc24[nm], name=nm,
                                 line=dict(color=PALETTE[i % len(PALETTE)], dash="dot", width=2))
-            fig.add_vline(x=hist36.index[-1], line_dash="dash", line_color=C_THRESH,
-                          annotation_text="Forecast start")
+            # plotly's add_vline + annotation can't average pandas Timestamps —
+            # pass the position as epoch-milliseconds (native for date axes)
+            fig.add_vline(x=hist36.index[-1].timestamp() * 1000, line_dash="dash",
+                          line_color=C_THRESH, annotation_text="Forecast start")
             fig.update_layout(height=460, **PLOT_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
 
