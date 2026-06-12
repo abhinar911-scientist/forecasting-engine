@@ -1,10 +1,11 @@
-streamlit>=1.36
-pandas>=2.0
-numpy>=1.26
-openpyxl>=3.1
-plotly>=5.20
-statsmodels>=0.14
-scikit-learn>=1.4
-lightgbm>=4.3
-xgboost>=2.0
-prophet>=1.1.5
+# Pinned for Streamlit Cloud stability — pair with Python 3.12 (Advanced settings)
+streamlit>=1.36,<2
+pandas>=2.2,<3
+numpy>=1.26,<3
+openpyxl>=3.1,<4
+plotly>=5.20,<6
+statsmodels>=0.14,<0.15
+scikit-learn>=1.4,<2
+lightgbm>=4.3,<5
+xgboost>=2.0,<4
+prophet>=1.1.5,<2

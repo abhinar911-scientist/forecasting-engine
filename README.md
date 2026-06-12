@@ -57,9 +57,13 @@ git push -u origin main
 ## Step 3 — Deploy on Streamlit Cloud
 1. Go to https://share.streamlit.io and sign in **with GitHub**.
 2. Click **New app** → pick repo `forecasting-engine`, branch `main`, main file `app.py`.
-3. Click **Deploy**. First build takes ~5–10 min (Prophet compiles its backend).
-4. Your app is live at `https://<app-name>.streamlit.app`. Every `git push` to `main`
-   auto-redeploys.
+3. **Important:** open **Advanced settings → Python version → 3.12** before deploying.
+   (Streamlit Cloud's newest default Python ships with pandas 3.x, which has breaking
+   API changes — the pinned `requirements.txt` pairs with Python 3.12.)
+4. Click **Deploy**. First build takes ~5–10 min (Prophet compiles its backend).
+5. Your app is live at `https://<app-name>.streamlit.app`. Every `git push` to `main`
+   auto-redeploys. If you change the Python version later, use
+   **Manage app → Reboot / Clear cache** to force a clean rebuild.
 
 ## Step 4 — Move credentials to Secrets (do this before sharing the URL)
 Hard-coded passwords in source code are unsafe. On Streamlit Cloud:

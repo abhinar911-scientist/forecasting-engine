@@ -393,34 +393,58 @@ elif page == PAGES[5]:
 else:
     header("Export Data", "Download forecasts, cleansed history and segmentation")
 
-    @st.cache_data
-    def build_export(file_hash, _seg, _locked_keys):
-        return _seg
-
     locked = st.session_state.get("locked", {})
     bestfits = st.session_state.get("bestfit", {})
 
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as xw:
-        seg_df.reset_index().to_excel(xw, "Segmentation", index=False)
-        if bestfits:
-            recs = []
-            for k, r in bestfits.items():
-                f = r["forecasts"][r["best"]]
-                recs.append(pd.DataFrame({"Key": k, "Month": f.index,
-                                          "Best Model": r["best"], "Forecast (kg)": f.values}))
-            pd.concat(recs).to_excel(xw, "BestFit_Forecasts", index=False)
-        if locked:
-            recs = [pd.DataFrame({"Key": k, "Month": v.index, "Consensus Fcst (kg)": v.values})
-                    for k, v in locked.items()]
-            pd.concat(recs).to_excel(xw, "Consensus_Locked", index=False)
-        pd.DataFrame({"Month": clean_s.index, "Key": sel_key,
-                      "Cleansed History": clean_s.values}).to_excel(xw, "Cleansed_Selected_Key", index=False)
+    # ---- Build every sheet first (always at least one), then write ----------
+    sheets = {}
+    sheets["Segmentation"] = (
+        seg_df.reset_index()
+        .replace([np.inf, -np.inf], np.nan)          # openpyxl cannot write inf
+    )
+    if bestfits:
+        recs = []
+        for k, r in bestfits.items():
+            f = r["forecasts"][r["best"]]
+            recs.append(pd.DataFrame({"Key": k, "Month": f.index,
+                                      "Best Model": r["best"],
+                                      "Forecast (kg)": np.round(f.values, 2)}))
+        sheets["BestFit_Forecasts"] = pd.concat(recs, ignore_index=True)
+    if locked:
+        recs = [pd.DataFrame({"Key": k, "Month": v.index,
+                              "Consensus Fcst (kg)": np.round(v.values, 2)})
+                for k, v in locked.items()]
+        sheets["Consensus_Locked"] = pd.concat(recs, ignore_index=True)
+    sheets["Cleansed_Selected_Key"] = pd.DataFrame(
+        {"Month": clean_s.index, "Key": sel_key,
+         "Cleansed History (kg)": np.round(clean_s.values, 2)})
 
-    st.download_button("⬇️ Download Forecast Workbook (.xlsx)", out.getvalue(),
-                       file_name="Forecasting_Engine_Output.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       type="primary")
+    @st.cache_data(show_spinner=False)
+    def build_workbook(_sheets: dict, cache_key: str) -> bytes:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for name, sdf in _sheets.items():
+                # Months -> tz-naive strings so every engine/version serialises cleanly
+                sdf = sdf.copy()
+                for col in sdf.columns:
+                    if pd.api.types.is_datetime64_any_dtype(sdf[col]):
+                        sdf[col] = sdf[col].dt.strftime("%Y-%m-%d")
+                sdf.to_excel(xw, sheet_name=str(name)[:31], index=False)
+        return buf.getvalue()
+
+    cache_key = file_hash + "|" + sel_key + "|" + str(len(bestfits)) + "|" + str(len(locked))
+    try:
+        payload = build_workbook(sheets, cache_key)
+        st.download_button("⬇️ Download Forecast Workbook (.xlsx)", payload,
+                           file_name="Forecasting_Engine_Output.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary")
+    except Exception as exc:                          # CSV fallback — never dead-end
+        st.error(f"Excel export failed ({type(exc).__name__}). Offering CSV instead.")
+        st.download_button("⬇️ Download Segmentation (.csv)",
+                           sheets["Segmentation"].to_csv(index=False).encode(),
+                           file_name="Forecasting_Engine_Segmentation.csv", mime="text/csv")
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Keys segmented", len(seg_df))
     c2.metric("Best-fits run", len(bestfits))
