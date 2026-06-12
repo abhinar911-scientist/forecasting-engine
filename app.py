@@ -1,14 +1,16 @@
 """
 Forecasting Engine — o9-inspired Demand Planning workbench (Streamlit)
-Workflow: Login -> Outlier Review -> Segmentation -> Best-fit Forecast ->
-Planner Workbench -> Consensus -> Forecast Accuracy -> Export
+Workflow tabs (left -> right): Outlier Review -> Segmentation -> Best-fit
+Forecast -> Planner Workbench -> Consensus -> Forecast Accuracy -> Export
 
-v3: neon high-visibility theme, parallel all-key best-fit, interactive
-backtesting model filter, and a Model Override tab with an audit log.
+v4: sequential horizontal workflow tabs, fully dark-themed dropdowns/inputs,
+plus all v3.x fixes (neon theme, parallel batch with executor fallback chain,
+backtesting filter, model override + audit log, hardened login secrets).
 """
 import hashlib
 import io
 import os
+import re as _re
 import time
 from datetime import datetime, timezone
 
@@ -27,6 +29,8 @@ st.set_page_config(page_title="Forecasting Engine", page_icon="📈", layout="wi
 NEON = "#00d4ff"          # neon blue accent
 TEXT = "#eaf4ff"          # near-white body text
 SUBTEXT = "#9fd8ff"       # bright cyan-tinted secondary text
+PANEL = "#101724"         # widget panel background
+BORDER = "#1f3a52"        # widget border
 
 CSS = f"""
 <style>
@@ -41,25 +45,69 @@ section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span {{color:{TEXT} !important;}}
 div[data-testid="stWidgetLabel"] p {{color:{SUBTEXT} !important; font-weight:600;}}
 
+/* ---- Dark theme for ALL dropdowns, inputs, pickers (BaseWeb widgets) ---- */
+div[data-baseweb="select"] > div {{background-color:{PANEL} !important;
+    border-color:{BORDER} !important; color:{TEXT} !important;}}
+div[data-baseweb="select"] span, div[data-baseweb="select"] div {{color:{TEXT} !important;}}
+div[data-baseweb="select"] svg {{fill:{SUBTEXT} !important;}}
+div[data-baseweb="select"] input {{color:{TEXT} !important;}}
+
+/* dropdown popover menus (rendered in a portal) */
+div[data-baseweb="popover"] > div, div[data-baseweb="popover"] ul,
+ul[data-baseweb="menu"], div[data-baseweb="menu"] {{background-color:{PANEL} !important;
+    border:1px solid {BORDER} !important;}}
+ul[data-baseweb="menu"] li, li[role="option"], div[role="option"] {{
+    background-color:{PANEL} !important; color:{TEXT} !important;}}
+ul[data-baseweb="menu"] li:hover, li[role="option"]:hover,
+li[aria-selected="true"], div[role="option"]:hover {{
+    background-color:{BORDER} !important; color:{NEON} !important;}}
+
+/* multiselect tags */
+div[data-baseweb="tag"] {{background-color:rgba(0,212,255,.15) !important;
+    border:1px solid rgba(0,212,255,.45) !important;}}
+div[data-baseweb="tag"] span {{color:{NEON} !important;}}
+div[data-baseweb="tag"] svg {{fill:{NEON} !important;}}
+
+/* text / number / password inputs */
+.stTextInput input, .stNumberInput input, div[data-baseweb="input"] input,
+div[data-baseweb="base-input"] {{background-color:{PANEL} !important;
+    color:{TEXT} !important; border-color:{BORDER} !important;}}
+div[data-baseweb="input"] {{background-color:{PANEL} !important;
+    border-color:{BORDER} !important;}}
+
+/* file uploader */
+div[data-testid="stFileUploader"] section {{background-color:{PANEL} !important;
+    border:1px dashed {BORDER} !important;}}
+div[data-testid="stFileUploader"] section span,
+div[data-testid="stFileUploader"] section small {{color:{SUBTEXT} !important;}}
+
+/* radio + checkbox + toggle labels */
+div[data-testid="stRadio"] label p, div[data-testid="stCheckbox"] label p {{color:{TEXT} !important;}}
+
 .block-container {{padding-top:1.1rem;}}
-div[data-testid="stMetric"] {{background:#101724; border:1px solid #1f3a52; border-radius:10px;
+div[data-testid="stMetric"] {{background:{PANEL}; border:1px solid {BORDER}; border-radius:10px;
                               padding:10px 14px; box-shadow:0 0 12px rgba(0,212,255,.07);}}
 div[data-testid="stMetric"] label {{color:{SUBTEXT} !important;}}
 div[data-testid="stMetricValue"] {{color:{NEON} !important;}}
 
-.stTabs [data-baseweb="tab-list"] {{background:#0e131b; border-radius:8px;}}
-.stTabs [data-baseweb="tab"] {{color:{SUBTEXT};}}
-.stTabs [aria-selected="true"] {{color:{NEON} !important; border-bottom-color:{NEON} !important;}}
+/* ---- Workflow tabs: sequential, left -> right ---- */
+.stTabs [data-baseweb="tab-list"] {{background:#0e131b; border-radius:10px; gap:2px;
+    border:1px solid #1d2735; padding:4px; flex-wrap:wrap;}}
+.stTabs [data-baseweb="tab"] {{color:{SUBTEXT}; font-weight:600; border-radius:8px; padding:8px 14px;}}
+.stTabs [data-baseweb="tab"]:hover {{color:{NEON}; background:rgba(0,212,255,.07);}}
+.stTabs [aria-selected="true"] {{color:#02131c !important;
+    background:linear-gradient(90deg,#0077b6,{NEON}) !important;}}
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{display:none;}}
 
 .stButton>button, .stDownloadButton>button {{background:linear-gradient(90deg,#0077b6,{NEON});
    color:#02131c; font-weight:700; border:0; border-radius:8px;}}
 .stButton>button:hover, .stDownloadButton>button:hover {{filter:brightness(1.15);}}
 
-div[data-testid="stDataFrame"] {{border:1px solid #1f3a52; border-radius:10px;}}
+div[data-testid="stDataFrame"] {{border:1px solid {BORDER}; border-radius:10px;}}
 .badge {{display:inline-block; padding:3px 12px; border-radius:14px; font-size:12px; font-weight:600;
         background:rgba(0,212,255,.12); color:{NEON}; border:1px solid rgba(0,212,255,.45); margin:0 6px 6px 0;}}
-.login-card {{max-width:430px; margin:8vh auto; background:#101724; padding:38px;
-             border-radius:14px; border:1px solid #1f3a52; box-shadow:0 0 30px rgba(0,212,255,.12);}}
+.login-card {{max-width:430px; margin:8vh auto; background:{PANEL}; padding:38px;
+             border-radius:14px; border:1px solid {BORDER}; box-shadow:0 0 30px rgba(0,212,255,.12);}}
 a {{color:{NEON} !important;}}
 </style>
 """
@@ -78,7 +126,7 @@ PALETTE = ["#ffd166", "#c77dff", "#ff9e64", "#4cc9f0", "#f72585",
            "#80ffdb", "#fca311", "#bde0fe", "#e9ff70", "#ff70a6"]
 
 # =============================================================================
-# 1. LOGIN
+# 1. LOGIN (hardened secrets handling)
 # =============================================================================
 def _secret(key: str, default: str) -> str:
     """st.secrets raises if no secrets.toml exists at all — fall back safely."""
@@ -92,8 +140,6 @@ def _clean(v) -> str:
     """Strip whitespace and accidental wrapping quotes from secret values."""
     return str(v).strip().strip('"').strip("'").strip()
 
-
-import re as _re
 
 DEFAULT_HASH = hashlib.sha256("Abhi@123".encode()).hexdigest()
 
@@ -225,12 +271,8 @@ df = cached_load(file_bytes)
 seg_df = cached_segmentation(file_hash, df, method, kk)
 
 # =============================================================================
-# NAVIGATION + GLOBAL CONTEXT
+# GLOBAL CONTEXT (key picker stays in sidebar; workflow moves to top tabs)
 # =============================================================================
-PAGES = ["1 · Outlier Review", "2 · Segmentation", "3 · Best-fit Forecast",
-         "4 · Planner Workbench", "5 · Consensus", "6 · Forecast Accuracy", "7 · Export"]
-page = st.sidebar.radio("Workflow", PAGES)
-
 all_keys = seg_df.sort_values("volume", ascending=False).index.tolist()
 sel_key = st.sidebar.selectbox("Stat Item (Key)", all_keys)
 
@@ -266,7 +308,7 @@ def effective_forecast(key, series, hz):
 
 
 def header(title, subtitle=""):
-    st.markdown(f"## {title}")
+    st.markdown(f"### {title}")
     if subtitle:
         st.caption(subtitle)
     eff, best, ov = effective_model(sel_key)
@@ -280,10 +322,19 @@ def header(title, subtitle=""):
         f"<span class='badge'>{rule_name}</span>{ov_badge}", unsafe_allow_html=True)
 
 
+RUN_BESTFIT_HINT = "Run Best-fit in the **3 · Best-fit Forecast** tab with this key in scope first."
+
 # =============================================================================
-# PAGE 1 — OUTLIER REVIEW
+# SEQUENTIAL WORKFLOW TABS (left -> right, same order as before)
 # =============================================================================
-if page == PAGES[0]:
+wf = st.tabs(["1 · Outlier Review", "2 · Segmentation", "3 · Best-fit Forecast",
+              "4 · Planner Workbench", "5 · Consensus", "6 · Forecast Accuracy",
+              "7 · Export"])
+
+# =============================================================================
+# TAB 1 — OUTLIER REVIEW
+# =============================================================================
+with wf[0]:
     header("Outlier Review", "Collect actuals, cleanse outliers automatically or on review basis")
     fig = go.Figure()
     fig.add_scatter(x=raw_s.index, y=raw_s.values, name="Actuals",
@@ -310,9 +361,9 @@ if page == PAGES[0]:
     st.dataframe(tbl, use_container_width=True)
 
 # =============================================================================
-# PAGE 2 — SEGMENTATION
+# TAB 2 — SEGMENTATION
 # =============================================================================
-elif page == PAGES[1]:
+with wf[1]:
     header("Portfolio Segmentation",
            "Quadrants by Volume × Coefficient of Variability + rule-based algorithm pools")
     plot_df = seg_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["cov"])
@@ -357,9 +408,9 @@ elif page == PAGES[1]:
     st.dataframe(show, use_container_width=True, height=420)
 
 # =============================================================================
-# PAGE 3 — BEST-FIT FORECAST  (parallel batch + filters + override)
+# TAB 3 — BEST-FIT FORECAST  (parallel batch + sub-tabs incl. Model Override)
 # =============================================================================
-elif page == PAGES[2]:
+with wf[2]:
     header("Best-fit Forecast",
            "Backcasting on holdout → scaled, weighted Model Selection Score → lowest score wins")
     st.markdown(f"**Candidate pool for selected key ({rule_name}):** " +
@@ -417,246 +468,258 @@ elif page == PAGES[2]:
         ov_map = st.session_state.get("overrides", {})
         summ["Final Model"] = [ov_map.get(k, {}).get("model", b)
                                for k, b in summ["Best-fit Model"].items()]
-        with st.expander(f"📋 Portfolio best-fit summary — {len(summ)} keys completed", expanded=False):
+        with st.expander(f"📋 Portfolio best-fit summary — {len(summ)} keys completed",
+                         expanded=False):
             mix = summ["Final Model"].value_counts()
             fig = go.Figure(go.Bar(x=mix.index, y=mix.values, marker_color=NEON))
             fig.update_layout(height=260, yaxis_title="# keys", **PLOT_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(summ.sort_values("Selection Score"), use_container_width=True, height=300)
+            st.dataframe(summ.sort_values("Selection Score"),
+                         use_container_width=True, height=300)
 
-    # ---- Selected-key detail --------------------------------------------------
+    # ---- Selected-key detail (sub-tabs) ---------------------------------------
     res = get_res(sel_key)
     if not res:
         st.info("Run best-fit with the selected key in scope to see its detail below.")
-        st.stop()
+    else:
+        best = res["best"]
+        eff, _, ov = effective_model(sel_key)
+        st.success(f"🏆 Best-fit model: **{best}** (lowest Model Selection Score)"
+                   + (f" — ⚠️ overridden to **{eff}**" if ov else ""))
 
-    best = res["best"]
-    eff, _, ov = effective_model(sel_key)
-    st.success(f"🏆 Best-fit model: **{best}** (lowest Model Selection Score)"
-               + (f" — ⚠️ overridden to **{eff}**" if ov else ""))
+        t1, t2, t3, t4 = st.tabs(["Forecast Chart", "Backtesting",
+                                  "Score & Rank Details", "Model Override"])
 
-    t1, t2, t3, t4 = st.tabs(["Forecast Chart", "Backtesting", "Score & Rank Details",
-                              "Model Override"])
+        # ---- Sub-tab 1: forecast chart (effective model) ----------------------
+        with t1:
+            mdl, fc = effective_forecast(sel_key, raw_s, horizon)
+            fig = go.Figure()
+            fig.add_scatter(x=clean_s.index, y=clean_s.values, name="History (cleansed)",
+                            line=dict(color=C_HIST, width=2))
+            fig.add_scatter(x=fc.index, y=fc.values, name=f"Forecast ({mdl})",
+                            line=dict(color=C_BEST, width=2.5))
+            fig.update_layout(height=420, **PLOT_LAYOUT)
+            st.plotly_chart(fig, use_container_width=True)
 
-    # ---- Tab 1: forecast chart (effective model) ------------------------------
-    with t1:
-        mdl, fc = effective_forecast(sel_key, raw_s, horizon)
-        fig = go.Figure()
-        fig.add_scatter(x=clean_s.index, y=clean_s.values, name="History (cleansed)",
-                        line=dict(color=C_HIST, width=2))
-        fig.add_scatter(x=fc.index, y=fc.values, name=f"Forecast ({mdl})",
-                        line=dict(color=C_BEST, width=2.5))
-        fig.update_layout(height=420, **PLOT_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
+        # ---- Sub-tab 2: backtesting with interactive model filter -------------
+        with t2:
+            others = [m for m in res["backtests"] if m != best]
+            chosen = st.multiselect(
+                "Compare models against the best-fit on the holdout "
+                f"(best-fit **{best}** is always shown)",
+                others, default=others[: min(3, len(others))], key="bt_filter")
+            fig = go.Figure()
+            fig.add_scatter(x=res["train"].index, y=res["train"].values, name="Train",
+                            line=dict(color=C_HIST, width=1.5), opacity=0.7)
+            fig.add_scatter(x=res["test"].index, y=res["test"].values, name="Holdout Actuals",
+                            mode="lines+markers", line=dict(color=C_ACT, width=3))
+            fig.add_scatter(x=res["test"].index, y=res["backtests"][best],
+                            name=f"⭐ Best-fit · {best}",
+                            mode="lines+markers", line=dict(color=C_BEST, width=3))
+            for i, nm in enumerate(chosen):
+                fig.add_scatter(x=res["test"].index, y=res["backtests"][nm], name=nm,
+                                line=dict(color=PALETTE[i % len(PALETTE)], dash="dot", width=2),
+                                opacity=0.9)
+            fig.update_layout(height=450, **PLOT_LAYOUT)
+            st.plotly_chart(fig, use_container_width=True)
 
-    # ---- Tab 2: backtesting with interactive model filter ---------------------
-    with t2:
-        others = [m for m in res["backtests"] if m != best]
-        chosen = st.multiselect(
-            "Compare models against the best-fit on the holdout "
-            f"(best-fit **{best}** is always shown)",
-            others, default=others[: min(3, len(others))], key="bt_filter")
-        fig = go.Figure()
-        fig.add_scatter(x=res["train"].index, y=res["train"].values, name="Train",
-                        line=dict(color=C_HIST, width=1.5), opacity=0.7)
-        fig.add_scatter(x=res["test"].index, y=res["test"].values, name="Holdout Actuals",
-                        mode="lines+markers", line=dict(color=C_ACT, width=3))
-        fig.add_scatter(x=res["test"].index, y=res["backtests"][best],
-                        name=f"⭐ Best-fit · {best}",
-                        mode="lines+markers", line=dict(color=C_BEST, width=3))
-        for i, nm in enumerate(chosen):
-            fig.add_scatter(x=res["test"].index, y=res["backtests"][nm], name=nm,
-                            line=dict(color=PALETTE[i % len(PALETTE)], dash="dot", width=2),
-                            opacity=0.9)
-        fig.update_layout(height=450, **PLOT_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
+            bt_tbl = pd.DataFrame({"Holdout Actuals": res["test"].values,
+                                   f"⭐ {best}": np.round(res["backtests"][best], 1),
+                                   **{nm: np.round(res["backtests"][nm], 1) for nm in chosen}},
+                                  index=[d.strftime("%b-%y") for d in res["test"].index]).T
+            st.dataframe(bt_tbl, use_container_width=True)
 
-        bt_tbl = pd.DataFrame({"Holdout Actuals": res["test"].values,
-                               f"⭐ {best}": np.round(res["backtests"][best], 1),
-                               **{nm: np.round(res["backtests"][nm], 1) for nm in chosen}},
-                              index=[d.strftime("%b-%y") for d in res["test"].index]).T
-        st.dataframe(bt_tbl, use_container_width=True)
+        # ---- Sub-tab 3: score & rank -------------------------------------------
+        with t3:
+            st.caption("Score = Σ (weight × scaled metric); metrics scaled 0–1 across models; "
+                       "range 0 (best) → 1 (worst). Includes MAPE, WMAPE, NFM (bias), "
+                       "Tracking Signal, ZMetric (reasonability) and MASE.")
+            mt = res["metric_table"].round(3)
+            st.dataframe(mt.style.highlight_min(subset=["Selection Score"], color="#0c4a2f"),
+                         use_container_width=True)
 
-    # ---- Tab 3: score & rank ----------------------------------------------------
-    with t3:
-        st.caption("Score = Σ (weight × scaled metric); metrics scaled 0–1 across models; "
-                   "range 0 (best) → 1 (worst). Includes MAPE, WMAPE, NFM (bias), "
-                   "Tracking Signal, ZMetric (reasonability) and MASE.")
-        mt = res["metric_table"].round(3)
-        st.dataframe(mt.style.highlight_min(subset=["Selection Score"], color="#0c4a2f"),
-                     use_container_width=True)
+        # ---- Sub-tab 4: MODEL OVERRIDE (decision on next-24-month outcome) -----
+        with t4:
+            st.caption("Override decision is based on the **next 24 months forecast outcome**, "
+                       "not the holdout. Last 36 months of history + 24-month forecasts shown.")
+            pool_models = tuple(res.get("pool", list(res["backtests"].keys())))
+            fc24 = cached_forecast_pool24(file_hash, sel_key, pool_models, method, kk, raw_s)
 
-    # ---- Tab 4: MODEL OVERRIDE (decision on next-24-month outcome) --------------
-    with t4:
-        st.caption("Override decision is based on the **next 24 months forecast outcome**, "
-                   "not the holdout. Last 36 months of history + 24-month forecasts shown.")
-        pool_models = tuple(res.get("pool", list(res["backtests"].keys())))
-        fc24 = cached_forecast_pool24(file_hash, sel_key, pool_models, method, kk, raw_s)
+            show_models = st.multiselect(
+                f"Models to display (best-fit **{best}** is always shown)",
+                [m for m in fc24.columns if m != best],
+                default=[m for m in fc24.columns if m != best][:3], key="ov_filter")
 
-        show_models = st.multiselect(
-            f"Models to display (best-fit **{best}** is always shown)",
-            [m for m in fc24.columns if m != best],
-            default=[m for m in fc24.columns if m != best][:3], key="ov_filter")
+            hist36 = clean_s.iloc[-36:]
+            fig = go.Figure()
+            fig.add_scatter(x=hist36.index, y=hist36.values, name="History (36 mo, cleansed)",
+                            line=dict(color=C_HIST, width=2))
+            fig.add_scatter(x=fc24.index, y=fc24[best], name=f"⭐ Best-fit · {best}",
+                            line=dict(color=C_BEST, width=3))
+            if ov and ov["model"] in fc24.columns and ov["model"] != best:
+                fig.add_scatter(x=fc24.index, y=fc24[ov["model"]],
+                                name=f"✅ Current override · {ov['model']}",
+                                line=dict(color="#ffd166", width=3))
+            for i, nm in enumerate(show_models):
+                if ov and nm == ov.get("model"):
+                    continue
+                fig.add_scatter(x=fc24.index, y=fc24[nm], name=nm,
+                                line=dict(color=PALETTE[i % len(PALETTE)], dash="dot", width=2))
+            fig.add_vline(x=hist36.index[-1], line_dash="dash", line_color=C_THRESH,
+                          annotation_text="Forecast start")
+            fig.update_layout(height=460, **PLOT_LAYOUT)
+            st.plotly_chart(fig, use_container_width=True)
 
-        hist36 = clean_s.iloc[-36:]
-        fig = go.Figure()
-        fig.add_scatter(x=hist36.index, y=hist36.values, name="History (36 mo, cleansed)",
-                        line=dict(color=C_HIST, width=2))
-        fig.add_scatter(x=fc24.index, y=fc24[best], name=f"⭐ Best-fit · {best}",
-                        line=dict(color=C_BEST, width=3))
-        if ov and ov["model"] in fc24.columns and ov["model"] != best:
-            fig.add_scatter(x=fc24.index, y=fc24[ov["model"]],
-                            name=f"✅ Current override · {ov['model']}",
-                            line=dict(color="#ffd166", width=3))
-        for i, nm in enumerate(show_models):
-            if ov and nm == ov.get("model"):
-                continue
-            fig.add_scatter(x=fc24.index, y=fc24[nm], name=nm,
-                            line=dict(color=PALETTE[i % len(PALETTE)], dash="dot", width=2))
-        fig.add_vline(x=hist36.index[-1], line_dash="dash", line_color=C_THRESH,
-                      annotation_text="Forecast start")
-        fig.update_layout(height=460, **PLOT_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
+            oc1, oc2 = st.columns([2, 1])
+            choice = oc1.selectbox("Final model for downstream workflows",
+                                   ["(keep best-fit)"] + [m for m in fc24.columns],
+                                   index=(list(fc24.columns).index(ov["model"]) + 1)
+                                   if ov and ov["model"] in fc24.columns else 0)
+            oc2.markdown("<br>", unsafe_allow_html=True)
+            if oc2.button("Apply decision", type="primary", use_container_width=True):
+                log = st.session_state.setdefault("override_log", [])
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                if choice == "(keep best-fit)":
+                    if ov:
+                        st.session_state["overrides"].pop(sel_key, None)
+                        log.append(dict(Timestamp=ts, Key=sel_key, Action="Override removed",
+                                        InitialBestFit=best, FinalModel=best,
+                                        ChangedBy=CURRENT_USER))
+                    st.success(f"Keeping best-fit **{best}** for {sel_key}.")
+                else:
+                    st.session_state.setdefault("overrides", {})[sel_key] = dict(
+                        model=choice, by=CURRENT_USER, at=ts, initial_best=best)
+                    log.append(dict(Timestamp=ts, Key=sel_key, Action="Override applied",
+                                    InitialBestFit=best, FinalModel=choice,
+                                    ChangedBy=CURRENT_USER))
+                    st.success(f"Override applied: **{choice}** will drive downstream "
+                               f"workflows for {sel_key}.")
+                # downstream artefacts for this key are now stale
+                st.session_state.get("adjustments", {}).pop(sel_key, None)
+                st.session_state.get("locked", {}).pop(sel_key, None)
+                st.rerun()
 
-        oc1, oc2 = st.columns([2, 1])
-        choice = oc1.selectbox("Final model for downstream workflows",
-                               ["(keep best-fit)"] + [m for m in fc24.columns],
-                               index=(list(fc24.columns).index(ov["model"]) + 1)
-                               if ov and ov["model"] in fc24.columns else 0)
-        oc2.markdown("<br>", unsafe_allow_html=True)
-        if oc2.button("Apply decision", type="primary", use_container_width=True):
-            log = st.session_state.setdefault("override_log", [])
-            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            if choice == "(keep best-fit)":
-                if ov:
-                    st.session_state["overrides"].pop(sel_key, None)
-                    log.append(dict(Timestamp=ts, Key=sel_key, Action="Override removed",
-                                    InitialBestFit=best, FinalModel=best, ChangedBy=CURRENT_USER))
-                st.success(f"Keeping best-fit **{best}** for {sel_key}.")
-            else:
-                st.session_state.setdefault("overrides", {})[sel_key] = dict(
-                    model=choice, by=CURRENT_USER, at=ts, initial_best=best)
-                log.append(dict(Timestamp=ts, Key=sel_key, Action="Override applied",
-                                InitialBestFit=best, FinalModel=choice, ChangedBy=CURRENT_USER))
-                st.success(f"Override applied: **{choice}** will drive downstream "
-                           f"workflows for {sel_key}.")
-            # downstream artefacts for this key are now stale
-            st.session_state.get("adjustments", {}).pop(sel_key, None)
-            st.session_state.get("locked", {}).pop(sel_key, None)
-            st.rerun()
-
-        log = st.session_state.get("override_log", [])
-        if log:
-            st.markdown("#### 📜 Override audit log")
-            st.dataframe(pd.DataFrame(log).iloc[::-1], use_container_width=True, height=220)
+            log = st.session_state.get("override_log", [])
+            if log:
+                st.markdown("#### 📜 Override audit log")
+                st.dataframe(pd.DataFrame(log).iloc[::-1],
+                             use_container_width=True, height=220)
 
 # =============================================================================
-# PAGE 4 — PLANNER WORKBENCH (uses effective model)
+# TAB 4 — PLANNER WORKBENCH (uses effective model)
 # =============================================================================
-elif page == PAGES[3]:
+with wf[3]:
     header("Planner Workbench",
            "Aggregate, review and overlay planner adjustments on the system forecast")
     if not get_res(sel_key):
-        st.warning("Run Best-fit (page 3) with this key in scope first.")
-        st.stop()
-    mdl, fc = effective_forecast(sel_key, raw_s, horizon)
-    st.caption(f"System forecast driven by final model: **{mdl}**")
+        st.warning(RUN_BESTFIT_HINT)
+    else:
+        mdl, fc = effective_forecast(sel_key, raw_s, horizon)
+        st.caption(f"System forecast driven by final model: **{mdl}**")
 
-    adj_store = st.session_state.setdefault("adjustments", {})
-    adj = adj_store.get(sel_key)
-    if adj is None or not adj.index.equals(fc.index):     # horizon/model changed → rebuild
-        adj = pd.DataFrame({"System Forecast": fc.values, "Promo Adj": 0.0,
-                            "Pricing Adj": 0.0, "Distribution Adj": 0.0,
-                            "Other Adj": 0.0}, index=fc.index)
+        adj_store = st.session_state.setdefault("adjustments", {})
+        adj = adj_store.get(sel_key)
+        if adj is None or not adj.index.equals(fc.index):   # horizon/model changed → rebuild
+            adj = pd.DataFrame({"System Forecast": fc.values, "Promo Adj": 0.0,
+                                "Pricing Adj": 0.0, "Distribution Adj": 0.0,
+                                "Other Adj": 0.0}, index=fc.index)
 
-    edited = st.data_editor(
-        adj.assign(**{"Planner Forecast": lambda d: d.sum(axis=1)}),
-        disabled=["System Forecast", "Planner Forecast"], use_container_width=True,
-        column_config={c: st.column_config.NumberColumn(format="%.0f") for c in adj.columns})
-    adj_store[sel_key] = edited.drop(columns=["Planner Forecast"])
-    planner = edited.drop(columns=["Planner Forecast"]).sum(axis=1)
+        edited = st.data_editor(
+            adj.assign(**{"Planner Forecast": lambda d: d.sum(axis=1)}),
+            disabled=["System Forecast", "Planner Forecast"], use_container_width=True,
+            column_config={c: st.column_config.NumberColumn(format="%.0f")
+                           for c in adj.columns})
+        adj_store[sel_key] = edited.drop(columns=["Planner Forecast"])
+        planner = edited.drop(columns=["Planner Forecast"]).sum(axis=1)
 
-    fig = go.Figure()
-    fig.add_bar(x=fc.index, y=fc.values, name=f"System Forecast ({mdl})", marker_color="#c77dff")
-    for col, colr in [("Promo Adj", "#ff9e64"), ("Pricing Adj", "#4cc9f0"),
-                      ("Distribution Adj", "#39ff8e"), ("Other Adj", "#ffd166")]:
-        fig.add_bar(x=fc.index, y=edited[col], name=col, marker_color=colr)
-    fig.add_scatter(x=fc.index, y=planner, name="Planner Forecast",
-                    line=dict(color=C_ACT, dash="dot", width=2.5))
-    fig.update_layout(barmode="stack", height=420, **PLOT_LAYOUT)
-    st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        fig.add_bar(x=fc.index, y=fc.values, name=f"System Forecast ({mdl})",
+                    marker_color="#c77dff")
+        for col, colr in [("Promo Adj", "#ff9e64"), ("Pricing Adj", "#4cc9f0"),
+                          ("Distribution Adj", "#39ff8e"), ("Other Adj", "#ffd166")]:
+            fig.add_bar(x=fc.index, y=edited[col], name=col, marker_color=colr)
+        fig.add_scatter(x=fc.index, y=planner, name="Planner Forecast",
+                        line=dict(color=C_ACT, dash="dot", width=2.5))
+        fig.update_layout(barmode="stack", height=420, **PLOT_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
 
 # =============================================================================
-# PAGE 5 — CONSENSUS (uses effective model)
+# TAB 5 — CONSENSUS (uses effective model)
 # =============================================================================
-elif page == PAGES[4]:
-    header("Consensus", "Compare forecasting streams side-by-side and lock the consensus forecast")
+with wf[4]:
+    header("Consensus",
+           "Compare forecasting streams side-by-side and lock the consensus forecast")
     if not get_res(sel_key):
-        st.warning("Run Best-fit (page 3) with this key in scope first.")
-        st.stop()
-    mdl, fc = effective_forecast(sel_key, raw_s, horizon)
-    adj = st.session_state.get("adjustments", {}).get(sel_key)
-    planner = adj.sum(axis=1) if (adj is not None and adj.index.equals(fc.index)) else fc
-    naive_stream = pd.Series(E.MODEL_REGISTRY["Seasonal Naive"](clean_s, len(fc)), index=fc.index)
+        st.warning(RUN_BESTFIT_HINT)
+    else:
+        mdl, fc = effective_forecast(sel_key, raw_s, horizon)
+        adj = st.session_state.get("adjustments", {}).get(sel_key)
+        planner = adj.sum(axis=1) if (adj is not None and adj.index.equals(fc.index)) else fc
+        naive_stream = pd.Series(E.MODEL_REGISTRY["Seasonal Naive"](clean_s, len(fc)),
+                                 index=fc.index)
 
-    streams = pd.DataFrame({f"System Stat Forecast ({mdl})": fc, "Planner Forecast": planner,
-                            "Sales Forecast (seasonal-naive proxy)": naive_stream})
-    pick = st.radio("Consensus forecast =", streams.columns.tolist(), horizontal=True)
-    st.session_state["consensus_pick"] = pick
+        streams = pd.DataFrame({f"System Stat Forecast ({mdl})": fc,
+                                "Planner Forecast": planner,
+                                "Sales Forecast (seasonal-naive proxy)": naive_stream})
+        pick = st.radio("Consensus forecast =", streams.columns.tolist(), horizontal=True)
+        st.session_state["consensus_pick"] = pick
 
-    fig = go.Figure()
-    for (nm, sdata), colr in zip(streams.items(), ["#4cc9f0", "#ff5c7a", "#c77dff"]):
-        fig.add_bar(x=streams.index, y=sdata, name=nm, marker_color=colr)
-    fig.add_scatter(x=streams.index, y=streams[pick], name="Consensus Fcst",
-                    line=dict(color=C_BEST, dash="dot", width=3))
-    fig.update_layout(barmode="group", height=430, **PLOT_LAYOUT)
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(streams.round(0).T, use_container_width=True)
+        fig = go.Figure()
+        for (nm, sdata), colr in zip(streams.items(), ["#4cc9f0", "#ff5c7a", "#c77dff"]):
+            fig.add_bar(x=streams.index, y=sdata, name=nm, marker_color=colr)
+        fig.add_scatter(x=streams.index, y=streams[pick], name="Consensus Fcst",
+                        line=dict(color=C_BEST, dash="dot", width=3))
+        fig.update_layout(barmode="group", height=430, **PLOT_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(streams.round(0).T, use_container_width=True)
 
-    if st.button("🔒 Lock consensus forecast for this key", type="primary"):
-        st.session_state.setdefault("locked", {})[sel_key] = streams[pick]
-        st.success(f"Locked **{pick}** as consensus for {sel_key}.")
+        if st.button("🔒 Lock consensus forecast for this key", type="primary"):
+            st.session_state.setdefault("locked", {})[sel_key] = streams[pick]
+            st.success(f"Locked **{pick}** as consensus for {sel_key}.")
 
 # =============================================================================
-# PAGE 6 — FORECAST ACCURACY / POST-GAME
+# TAB 6 — FORECAST ACCURACY / POST-GAME
 # =============================================================================
-elif page == PAGES[5]:
+with wf[5]:
     header("Forecast Accuracy (Post-game)",
            "Compare streams on the holdout: does the adjustment add value vs the system stat forecast?")
-    res = get_res(sel_key)
-    if not res:
-        st.warning("Run Best-fit (page 3) with this key in scope first.")
-        st.stop()
-    test, train = res["test"], res["train"]
-    rows = {}
-    for nm, f in res["backtests"].items():
-        m = E.metrics(test.values, f, train.values)
-        rows[nm] = {"Accuracy % (1−WMAPE)": max(0, 100 - m["WMAPE"]), "MAPE": m["MAPE"],
-                    "Bias (NFM)": m["NFM"], "MASE": m["MASE"]}
-    acc = pd.DataFrame(rows).T.sort_values("Accuracy % (1−WMAPE)", ascending=False).round(1)
-    best = res["best"]
-    eff, _, _ = effective_model(sel_key)
+    res6 = get_res(sel_key)
+    if not res6:
+        st.warning(RUN_BESTFIT_HINT)
+    else:
+        test, train = res6["test"], res6["train"]
+        rows = {}
+        for nm, f in res6["backtests"].items():
+            m = E.metrics(test.values, f, train.values)
+            rows[nm] = {"Accuracy % (1−WMAPE)": max(0, 100 - m["WMAPE"]), "MAPE": m["MAPE"],
+                        "Bias (NFM)": m["NFM"], "MASE": m["MASE"]}
+        acc = pd.DataFrame(rows).T.sort_values("Accuracy % (1−WMAPE)", ascending=False).round(1)
+        best6 = res6["best"]
+        eff6, _, _ = effective_model(sel_key)
 
-    fig = go.Figure()
-    fig.add_bar(x=acc.index, y=acc["Accuracy % (1−WMAPE)"],
-                marker_color=[C_BEST if i == best else
-                              ("#ffd166" if i == eff else "#ff5c7a") for i in acc.index])
-    fig.update_layout(height=380, yaxis_title="Accuracy %", **PLOT_LAYOUT)
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Green = best-fit · Yellow = current override · Red = others")
-    st.dataframe(acc, use_container_width=True)
-    va = acc.loc[best, "Accuracy % (1−WMAPE)"] - acc["Accuracy % (1−WMAPE)"].drop(best).max()
-    st.metric("Value-Add of best-fit vs next stream", f"{va:+.1f} pts",
-              "Use system stat" if va >= 0 else "Review adjustments")
+        fig = go.Figure()
+        fig.add_bar(x=acc.index, y=acc["Accuracy % (1−WMAPE)"],
+                    marker_color=[C_BEST if i == best6 else
+                                  ("#ffd166" if i == eff6 else "#ff5c7a") for i in acc.index])
+        fig.update_layout(height=380, yaxis_title="Accuracy %", **PLOT_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Green = best-fit · Yellow = current override · Red = others")
+        st.dataframe(acc, use_container_width=True)
+        va = acc.loc[best6, "Accuracy % (1−WMAPE)"] - \
+            acc["Accuracy % (1−WMAPE)"].drop(best6).max()
+        st.metric("Value-Add of best-fit vs next stream", f"{va:+.1f} pts",
+                  "Use system stat" if va >= 0 else "Review adjustments")
 
 # =============================================================================
-# PAGE 7 — EXPORT
+# TAB 7 — EXPORT
 # =============================================================================
-else:
-    header("Export Data", "Download forecasts, cleansed history, segmentation and the override log")
+with wf[6]:
+    header("Export Data",
+           "Download forecasts, cleansed history, segmentation and the override log")
 
     locked = st.session_state.get("locked", {})
-    bestfits = {k: v for k, v in st.session_state.get("bestfit", {}).items() if "error" not in v}
+    bestfits = {k: v for k, v in st.session_state.get("bestfit", {}).items()
+                if "error" not in v}
     overrides = st.session_state.get("overrides", {})
     log = st.session_state.get("override_log", [])
 
@@ -672,7 +735,8 @@ else:
             recs.append(pd.DataFrame({"Key": k, "Month": f.index,
                                       "Initial Best-fit": r["best"],
                                       "Final Model": final_model,
-                                      "Forecast (kg)": np.round(np.asarray(f.values, float), 2)}))
+                                      "Forecast (kg)": np.round(
+                                          np.asarray(f.values, float), 2)}))
         sheets["Final_Forecasts"] = pd.concat(recs, ignore_index=True)
     if locked:
         recs = [pd.DataFrame({"Key": k, "Month": v.index,
@@ -703,7 +767,8 @@ else:
         payload = build_workbook(sheets, cache_key)
         st.download_button("⬇️ Download Forecast Workbook (.xlsx)", payload,
                            file_name="Forecasting_Engine_Output.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           mime="application/vnd.openxmlformats-officedocument."
+                                "spreadsheetml.sheet",
                            type="primary")
     except Exception as exc:
         st.error(f"Excel export failed ({type(exc).__name__}). Offering CSV instead.")
