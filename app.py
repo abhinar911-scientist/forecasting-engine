@@ -88,8 +88,25 @@ def _secret(key: str, default: str) -> str:
         return default
 
 
-VALID_USER = _secret("APP_USER", "Abhishek")
-VALID_PW_HASH = _secret("APP_PW_SHA256", hashlib.sha256("Abhi@123".encode()).hexdigest())
+def _clean(v) -> str:
+    """Strip whitespace and accidental wrapping quotes from secret values."""
+    return str(v).strip().strip('"').strip("'").strip()
+
+
+import re as _re
+
+DEFAULT_HASH = hashlib.sha256("Abhi@123".encode()).hexdigest()
+
+VALID_USER = _clean(_secret("APP_USER", "Abhishek"))
+
+_raw_hash = _clean(_secret("APP_PW_SHA256", "")).lower()
+_raw_plain = _clean(_secret("APP_PASSWORD", ""))
+if _re.fullmatch(r"[0-9a-f]{64}", _raw_hash):
+    VALID_PW_HASH = _raw_hash                 # valid SHA-256 hex from secrets
+elif _raw_plain:
+    VALID_PW_HASH = hashlib.sha256(_raw_plain.encode()).hexdigest()  # plaintext secret
+else:
+    VALID_PW_HASH = DEFAULT_HASH              # no/malformed secret → safe default
 
 
 def login_screen():
@@ -101,9 +118,11 @@ def login_screen():
         pw = st.text_input("Password", type="password")
         ok = st.form_submit_button("Sign in", use_container_width=True)
     if ok:
-        if user.strip() == VALID_USER and hashlib.sha256(pw.encode()).hexdigest() == VALID_PW_HASH:
+        u_ok = _clean(user).lower() == VALID_USER.lower()
+        p_ok = hashlib.sha256(pw.encode()).hexdigest() == VALID_PW_HASH
+        if u_ok and p_ok:
             st.session_state["auth"] = True
-            st.session_state["user"] = user.strip()
+            st.session_state["user"] = _clean(user)
             st.rerun()
         else:
             st.error("Invalid User ID or Password")
