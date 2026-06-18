@@ -9,3 +9,22 @@ scikit-learn>=1.4,<2
 lightgbm>=4.3,<5
 xgboost>=2.0,<4
 prophet>=1.1.5,<2
+psutil>=5.9            # used to gauge available RAM before loading heavy models
+
+# ---------------------------------------------------------------------------
+# OPTIONAL zero-shot foundation models. The app auto-detects these: if a package
+# is absent (or the host lacks RAM) the model is simply skipped — nothing breaks.
+# Uncomment ONLY on a host with enough RAM/CPU (NOT free Streamlit Community Cloud).
+#
+# Chronos-Bolt (Amazon) — lightest, CPU-friendly (~200 MB). Recommended first.
+# chronos-forecasting>=2.0
+# torch>=2.2,<3
+#
+# MOIRAI (Salesforce) — small variant ~100 MB.
+# uni2ts>=1.2
+#
+# TimesFM (Google) — heavy (~1.5 GB RAM). Needs a larger host.
+# timesfm>=2.0
+#
+# TimeGPT (Nixtla) — API model; also set env var NIXTLA_API_KEY (sends data to Nixtla).
+# nixtla>=0.6

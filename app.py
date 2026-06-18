@@ -21,6 +21,12 @@ import streamlit as st
 
 import engine as E
 
+try:
+    from foundation import foundation_status as E_foundation_status
+except Exception:
+    def E_foundation_status():
+        return []
+
 # =============================================================================
 # PAGE CONFIG + HIGH-VISIBILITY NEON DARK THEME
 # =============================================================================
@@ -135,6 +141,20 @@ button[data-baseweb="tab"][aria-selected="true"] span {{
 .stButton>button:hover, .stDownloadButton>button:hover {{filter:brightness(1.15);}}
 
 div[data-testid="stDataFrame"] {{border:1px solid {BORDER}; border-radius:10px;}}
+
+/* ---- Keep chart Fullscreen mode dark (matches the in-page theme) ----
+   When a chart is expanded, Streamlit turns stFullScreenFrame into a fixed
+   full-viewport overlay whose inline background is the theme bgColor (white).
+   Force the app's dark background on that overlay and its plotly canvas. */
+div[data-testid="stFullScreenFrame"] {{background-color:#0a0e14 !important;}}
+div[data-testid="stFullScreenFrame"] > div {{background-color:#0a0e14 !important;}}
+div[data-testid="stFullScreenFrame"] .js-plotly-plot,
+div[data-testid="stFullScreenFrame"] .plot-container,
+div[data-testid="stFullScreenFrame"] .svg-container,
+div[data-testid="stFullScreenFrame"] .main-svg {{background:#0a0e14 !important;}}
+/* the fullscreen exit toolbar button stays visible on dark */
+div[data-testid="stFullScreenFrame"] button,
+div[data-testid="stFullScreenFrame"] button svg {{color:{TEXT} !important; fill:{TEXT} !important;}}
 .badge {{display:inline-block; padding:3px 12px; border-radius:14px; font-size:12px; font-weight:600;
         background:rgba(0,212,255,.12); color:{NEON}; border:1px solid rgba(0,212,255,.45); margin:0 6px 6px 0;}}
 .login-card {{max-width:430px; margin:8vh auto; background:{PANEL}; padding:38px;
@@ -269,7 +289,17 @@ with st.sidebar:
     st.markdown("**Forecast settings**")
     horizon = st.slider("Horizon (months)", 3, 24, 12)
     holdout = st.slider("Holdout for best-fit (months)", 3, 12, 6)
-    fast_mode = st.toggle("Fast mode (skip Prophet)", value=True)
+    fast_mode = st.toggle("Fast mode (skip Prophet & zero-shot models)", value=True)
+    deep_mode = st.toggle("Deep mode (include zero-shot foundation models)", value=False,
+                          help="Adds Chronos/MOIRAI/TimesFM/TimeGPT where available. "
+                               "Slower: the first call loads model weights.")
+    # Foundation model availability (zero-shot)
+    fstatus = E_foundation_status()
+    usable = [r["Model"] for r in fstatus if r["Usable"]]
+    with st.expander(f"Zero-shot models: {len(usable)} ready", expanded=False):
+        for r in fstatus:
+            icon = "✅" if r["Usable"] else "⚪"
+            st.caption(f"{icon} **{r['Model']}** — {r['Note']}")
     st.markdown("**Selection score weights** (sum normalised to 1)")
     weights = {}
     for mname, dflt in E.DEFAULT_WEIGHTS.items():
@@ -292,7 +322,7 @@ if st.session_state.get("file_hash") != file_hash:
 
 # Settings signature: if cleansing / scoring settings change, prior best-fits are stale
 settings_sig = hashlib.md5(
-    f"{method}|{kk}|{horizon}|{holdout}|{fast_mode}|{sorted(weights.items())}".encode()
+    f"{method}|{kk}|{horizon}|{holdout}|{fast_mode}|{deep_mode}|{sorted(weights.items())}".encode()
 ).hexdigest()
 if st.session_state.get("settings_sig") not in (None, settings_sig):
     st.session_state.pop("bestfit", None)
@@ -458,10 +488,16 @@ with wf[2]:
                   "Top 200 by volume": all_keys[:200],
                   "All keys": all_keys}[scope]
     pending = [k for k in scope_keys if k not in st.session_state.get("bestfit", {})]
+    zs_badge = (f"<span class='badge' style='background:rgba(255,209,102,.15);"
+                f"color:#ffd166;border-color:#ffd16677;'>Deep: zero-shot ON</span>"
+                if deep_mode else "")
     cc2.markdown(f"<br><span class='badge'>{len(scope_keys)} keys in scope</span>"
                  f"<span class='badge'>{len(pending)} to run</span>"
-                 f"<span class='badge'>{n_workers} parallel workers</span>",
+                 f"<span class='badge'>{n_workers} parallel workers</span>{zs_badge}",
                  unsafe_allow_html=True)
+    if deep_mode and len(scope_keys) > 50:
+        cc1.caption("⚠️ Deep mode loads foundation-model weights and runs in threads; "
+                    "for large scopes this is slow on shared hosts. Consider Top 50 first.")
 
     if st.button("⚙️ Run Best-fit (parallel, per-key candidate pools)", type="primary"):
         keys_to_run = pending or scope_keys
@@ -469,7 +505,8 @@ with wf[2]:
         grouped = {k: v for k, v in df[df["Key"].isin(keys_to_run)].groupby("Key")}
         for k in keys_to_run:
             tasks.append((k, E.to_series(grouped[k]), seg_df.loc[k, "vol_class"],
-                          method, kk, horizon, holdout, weights, fast_mode))
+                          method, kk, horizon, holdout, weights, fast_mode,
+                          True if deep_mode else None))
         prog = st.progress(0.0, text=f"Running best-fit on {len(tasks)} keys…")
         t0 = time.time()
         results = E.run_batch_parallel(

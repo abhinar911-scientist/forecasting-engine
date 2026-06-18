@@ -133,8 +133,8 @@ def volume_class(volumes: pd.Series) -> pd.Series:
     return cls.reindex(volumes.index)
 
 
-def rule_for(seg: dict) -> tuple:
-    """o9-style rule -> candidate model pool."""
+def _rule_for_base(seg: dict) -> tuple:
+    """o9-style rule -> candidate model pool (classical models only)."""
     if seg["intermittent"]:
         return "Rule 1", ["Croston", "SBA", "Seasonal Naive", "Moving Average"]
     if seg["plc"] == "End of Life":
@@ -156,6 +156,16 @@ def rule_for(seg: dict) -> tuple:
                                "Prophet", "LightGBM", "Random Forest"])
         return "Rule 6b", ["Auto ARIMA", "SES", "Theta", "XGBoost", "Neural Net (MLP)"]
     return "Rule 8", ["ETS", "SES", "Moving Average"]
+
+
+def rule_for(seg: dict) -> tuple:
+    """o9-style rule -> candidate model pool, with any available zero-shot
+    foundation models appended to EVERY rule (per the requirement to make them
+    available for all rules). Foundation names resolve at call time, after the
+    registry has been populated."""
+    rule, pool = _rule_for_base(seg)
+    extra = [m for m in globals().get("FOUNDATION_NAMES", []) if m not in pool]
+    return rule, pool + extra
 
 
 # ----------------------------------------------------------------------------- 
@@ -381,7 +391,18 @@ MODEL_REGISTRY = {
     "Neural Net (MLP)": m_mlp,
 }
 
-FAST_ONLY_EXCLUDE = {"Prophet"}  # excluded when speed mode is on
+# --- Zero-shot foundation models (optional; only those usable in this env) ----
+try:
+    from foundation import discover_foundation_models
+    FOUNDATION_MODELS = discover_foundation_models()       # {name: callable}
+except Exception:
+    FOUNDATION_MODELS = {}
+MODEL_REGISTRY.update(FOUNDATION_MODELS)
+FOUNDATION_NAMES = list(FOUNDATION_MODELS.keys())
+
+# Foundation models are excluded under Fast mode (their first call loads weights,
+# which is slow once per process). Power users can turn Fast mode off to include them.
+FAST_ONLY_EXCLUDE = {"Prophet", *FOUNDATION_NAMES}
 
 
 # ----------------------------------------------------------------------------- 
@@ -418,11 +439,33 @@ def selection_scores(metric_table: pd.DataFrame, weights: dict) -> pd.Series:
 
 
 def run_bestfit(s: pd.Series, candidates: list, horizon: int, holdout: int,
-                weights: dict, fast_mode: bool = True) -> dict:
-    """Backtest candidates on holdout, score, pick winner, refit on full history."""
+                weights: dict, fast_mode: bool = True,
+                include_foundation: bool = None, max_models: int = None) -> dict:
+    """Backtest candidates on holdout, score, pick winner, refit on full history.
+
+    Performance controls (matter as the model count grows):
+      * fast_mode           — drop slow models (Prophet + foundation) for big batches
+      * include_foundation  — force-include/exclude zero-shot models regardless of
+                              fast_mode (None = follow fast_mode)
+      * max_models          — hard cap on how many candidates are backtested
+                              (classical models are kept first, foundation last)
+    """
     cands = [c for c in candidates if c in MODEL_REGISTRY]
-    if fast_mode:
+
+    fnames = set(globals().get("FOUNDATION_NAMES", []))
+    if include_foundation is True:
+        cands = cands + [m for m in fnames if m in MODEL_REGISTRY and m not in cands]
+    elif include_foundation is False:
+        cands = [c for c in cands if c not in fnames]
+    elif fast_mode:
         cands = [c for c in cands if c not in FAST_ONLY_EXCLUDE] or cands
+
+    if max_models and len(cands) > max_models:
+        # keep classical first (cheap), then as many foundation as the cap allows
+        classical = [c for c in cands if c not in fnames]
+        found = [c for c in cands if c in fnames]
+        cands = (classical + found)[:max_models]
+
     holdout = min(holdout, max(len(s) // 4, 3))
     train, test = s.iloc[:-holdout], s.iloc[-holdout:]
 
@@ -461,16 +504,19 @@ def forecast_one(s: pd.Series, model: str, horizon: int) -> pd.Series:
 # 6. BATCH / PARALLEL EXECUTION (one self-contained worker per key)
 # -----------------------------------------------------------------------------
 def batch_worker(args):
-    """Process-pool worker: full pipeline for one key.
-    args = (key, series, vol_class, method, k, horizon, holdout, weights, fast_mode)
+    """Process/thread-pool worker: full pipeline for one key.
+    args = (key, series, vol_class, method, k, horizon, holdout, weights, fast_mode
+            [, include_foundation])
     Returns (key, payload-dict) — everything pandas-pickled, safe across processes."""
-    key, s, vol_class, method, k, horizon, holdout, weights, fast = args
+    key, s, vol_class, method, k, horizon, holdout, weights, fast = args[:9]
+    include_foundation = args[9] if len(args) > 9 else None
     try:
         c, lo, hi, fl = cleanse_series(s, method, k)
         seg = classify_series(c)
         seg["vol_class"] = vol_class
         rule, pool = rule_for(seg)
-        res = run_bestfit(c, pool, horizon, holdout, weights, fast)
+        res = run_bestfit(c, pool, horizon, holdout, weights, fast,
+                          include_foundation=include_foundation)
         res.update(rule=rule, pool=pool, cleansed=c)
         return key, res
     except Exception as exc:                       # never kill the whole batch
@@ -516,6 +562,17 @@ def run_batch_parallel(tasks: list, max_workers: int = None, progress_cb=None) -
             if progress_cb:
                 progress_cb(done, n)
         return results
+
+    # If any task requests foundation models, run in THREADS first: foundation
+    # weights are a per-process singleton, so threads share one load instead of
+    # each spawned process re-downloading/re-loading ~hundreds of MB.
+    wants_foundation = any(len(t) > 9 and t[9] for t in tasks)
+    if wants_foundation:
+        try:
+            with ThreadPoolExecutor(max_workers=min(workers, 4)) as ex:
+                return _collect(ex)
+        except Exception:
+            return _run_serial(tasks, progress_cb)
 
     # 1) Process pool — explicit 'spawn' (Python 3.14 defaults to forkserver,
     #    which fails on sandboxed hosts with ConnectionResetError)
