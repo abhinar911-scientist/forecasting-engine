@@ -142,19 +142,6 @@ button[data-baseweb="tab"][aria-selected="true"] span {{
 
 div[data-testid="stDataFrame"] {{border:1px solid {BORDER}; border-radius:10px;}}
 
-/* ---- Keep chart Fullscreen mode dark (matches the in-page theme) ----
-   When a chart is expanded, Streamlit turns stFullScreenFrame into a fixed
-   full-viewport overlay whose inline background is the theme bgColor (white).
-   Force the app's dark background on that overlay and its plotly canvas. */
-div[data-testid="stFullScreenFrame"] {{background-color:#0a0e14 !important;}}
-div[data-testid="stFullScreenFrame"] > div {{background-color:#0a0e14 !important;}}
-div[data-testid="stFullScreenFrame"] .js-plotly-plot,
-div[data-testid="stFullScreenFrame"] .plot-container,
-div[data-testid="stFullScreenFrame"] .svg-container,
-div[data-testid="stFullScreenFrame"] .main-svg {{background:#0a0e14 !important;}}
-/* the fullscreen exit toolbar button stays visible on dark */
-div[data-testid="stFullScreenFrame"] button,
-div[data-testid="stFullScreenFrame"] button svg {{color:{TEXT} !important; fill:{TEXT} !important;}}
 .badge {{display:inline-block; padding:3px 12px; border-radius:14px; font-size:12px; font-weight:600;
         background:rgba(0,212,255,.12); color:{NEON}; border:1px solid rgba(0,212,255,.45); margin:0 6px 6px 0;}}
 .login-card {{max-width:430px; margin:8vh auto; background:{PANEL}; padding:38px;
