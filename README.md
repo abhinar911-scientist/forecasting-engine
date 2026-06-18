@@ -5,7 +5,7 @@ A production-grade, o9-style interactive demand planning app built in Streamlit.
 **Workflow:** Login → Outlier Review → Segmentation → Best-fit Forecast → Planner Workbench → Consensus → Forecast Accuracy → Export
 
 ## Features
-- **Login screen** (User ID: `Abhishek`)
+- **Login screen** 
 - **Outlier Review** — IQR/Sigma thresholds, system-cleansed actuals, outlier flags (red cells)
 - **Segmentation** — Volume × CoV quadrants (AX/AY/BX/BY), ADI/CV² demand patterns
   (Smooth / Erratic / Intermittent / Lumpy), PLC, trend & seasonality tests
@@ -22,18 +22,6 @@ A production-grade, o9-style interactive demand planning app built in Streamlit.
 - **Auto-refresh** — the app hashes the uploaded file; a new upload clears caches
   and recomputes everything
 
-## Run locally
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Input file
-Same layout as `Sales_History_last_36_months_v1.xlsx`:
-| Month | Key | History For Forecast (kg) |
-|---|---|---|
-
----
 
 # 🚀 Deploy to Streamlit Community Cloud via GitHub
 
@@ -65,26 +53,7 @@ git push -u origin main
    auto-redeploys. If you change the Python version later, use
    **Manage app → Reboot / Clear cache** to force a clean rebuild.
 
-## Step 4 — Move credentials to Secrets (do this before sharing the URL)
-Hard-coded passwords in source code are unsafe. On Streamlit Cloud:
-1. App page → **⋮ → Settings → Secrets**, add:
-   ```toml
-   APP_USER = "Abhishek"
-   APP_PW_SHA256 = "3946259a858b6ba2a76770041490d296ee6c8556a65f89d3f15286cbccd556b8"
-   ```
-   That hash is exactly `sha256("Abhi@123")` — paste it verbatim (64 hex chars, no
-   `<` `>` placeholders, no extra quotes). To change the password later, generate a
-   new hash with `python -c "import hashlib;print(hashlib.sha256('NewPass'.encode()).hexdigest())"`
-   or simply set a plaintext secret instead: `APP_PASSWORD = "NewPass"`.
-   The app sanitises secrets (whitespace/quotes/case) and, if `APP_PW_SHA256` is
-   missing or malformed, falls back to `APP_PASSWORD`, then to the built-in default —
-   so a bad secret can never lock everyone out.
-2. In `app.py`, replace the constants with:
-   ```python
-   VALID_USER = st.secrets.get("APP_USER", "Abhishek")
-   VALID_PW_HASH = st.secrets.get("APP_PW_SHA256", VALID_PW_HASH)
-   ```
-   (Locally, put the same keys in `.streamlit/secrets.toml` — already gitignored.)
+
 
 ## Zero-shot foundation models (optional, auto-detected)
 The app can use pretrained "zero-shot" time-series foundation models alongside the
@@ -120,17 +89,5 @@ degrades gracefully — no configuration needed:
    new process creation (numpy/statsmodels/LightGBM release the GIL in their C
    cores, so threads still overlap well)
 3. **Serial loop** as the guaranteed last resort
-
-## Safe-deployment checklist
-- ✅ **Private repo** — keeps code, business logic and any sample data out of public view
-- ✅ **Secrets, not source** — credentials live in Streamlit Secrets / secrets.toml only
-- ✅ **Hash passwords** — the app compares SHA-256 hashes, never plaintext
-- ✅ **Never commit data** — `.gitignore` blocks `.xlsx`; users upload at runtime,
-  Streamlit Cloud keeps uploads in memory per session only
-- ✅ **Pin dependencies** — `requirements.txt` uses minimum versions; for strict
-  reproducibility, pin exact versions (`pip freeze`) before go-live
-- ✅ **Limit upload size** — `maxUploadSize = 100` MB in config.toml
-- ✅ **Rotate the password** periodically; for multiple users or SSO, consider
-  `streamlit-authenticator` or putting the app behind your company's identity provider
 - ⚠️ Streamlit Community Cloud is public internet — for confidential sales data,
   prefer Streamlit on an internal server / Snowflake / company cloud with VPN
